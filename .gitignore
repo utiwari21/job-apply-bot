@@ -1,0 +1,35 @@
+# secrets
+.env
+credentials.json
+token.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# playwright
+playwright-report/
+test-results/
+
+# latex build artifacts
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# generated resumes
+*.tex
+*.pdf
+outputs/
+resumes/
+
+.playwright-simplify-profile/
+*-profile/
+user-data-dir/
+
+application_results.jsonl
+*.jsonl

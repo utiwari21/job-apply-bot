@@ -1,0 +1,15 @@
+full_time:
+  min_base_usd: 118000
+  require_united_states: true
+
+internship:
+  min_hourly_usd: 57
+  assume_hours_per_week: 40
+  rank_relocation: true
+  rank_housing: true
+
+# Used only when the posting has no pay. Conservative company/role averages.
+# If the estimated FT base is still below min_base_usd, do not apply.
+salary_defaults:
+  hours_per_week: 40
+  weeks_per_year: 52
