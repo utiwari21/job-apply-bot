@@ -1,67 +1,123 @@
-# Job apply bot
+# job-apply-bot
 
-Gmail digest emails (`👀 {X} New Jobs Posted Today` / `👀 {X} New Internships Posted Today`) → filter → tailor LaTeX → PDF → apply.
+An agentic pipeline that reads job-posting digest emails, filters them against
+configurable criteria, tailors a LaTeX resume per listing, compiles it, and
+drives a browser to submit the application.
 
-## SMTP vs Google Cloud
+Python · Playwright · Gemini · pytest
 
-**SMTP cannot read your inbox.** It only sends mail.
+## Why it exists
 
-You do **not** need a Google Cloud OAuth app. Use:
+Applying to a few hundred postings by hand is mostly mechanical: read the
+posting, decide whether it is worth the time, rewrite the same experience in
+the language the posting uses, compile, upload, fill the form. The judgment
+calls are worth keeping. The rest is not.
 
-1. **IMAP** (this bot) to read unread Primary inbox mail — Gmail App Password
-2. **SMTP** (optional) only if you want a notification sent to yourself after each listing
+The interesting part of building it was not the automation. It was deciding
+where the model is allowed to act and where it is not.
 
-## Gmail credentials (no Google Cloud)
+## Architecture
 
-You need an **App Password**, not OAuth client IDs.
+```
+Gmail (IMAP, unread digests)
+  → parse listings out of the email HTML
+  → filter against config/filters.yaml
+  → tailor a LaTeX resume from a template (Gemini)
+  → compile to PDF (latexmk / pdflatex)
+  → Playwright fills and submits the form
+  → append the outcome to a run log
+```
 
-1. In Gmail: gear → **See all settings** → **Forwarding and POP/IMAP** → enable **IMAP** → Save.
-2. Open [Google Account security](https://myaccount.google.com/security).
-3. Turn on **2-Step Verification** if it is off.
-4. Open [App passwords](https://myaccount.google.com/apppasswords) (or Security → 2-Step Verification → App passwords).
-5. Create one named `job-apply-bot`. Google shows a 16-character password once.
-6. Copy `.env.example` to `.env` and set:
-   - `GMAIL_ADDRESS` — the inbox that receives the digest emails
-   - `GMAIL_APP_PASSWORD` — that 16-character value (spaces optional)
+One unread digest at a time, listings in order, email marked read once
+processed. No application database.
 
-Your normal Gmail password will be rejected by IMAP. Do not put a Google Cloud JSON key in this project.
+## Design decisions
 
-## Resumes (project root)
+**The model is constrained to emit a compilable artifact and nothing else.**
+Asked for a tailored resume, a language model will happily wrap its output in a
+markdown code fence. That fence breaks the LaTeX build, and it breaks it
+silently: `pdflatex` fails, the previous PDF is still on disk, and the pipeline
+submits a stale file. The prompt forbids anything outside the `.tex` body, and
+the compile step is checked rather than assumed.
 
-| Kind | Working files (overwritten per listing) | Template (never submitted) |
-|---|---|---|
-| Full-time | `Utkarsh_Tiwari_Software_Engineer.tex` + `.pdf` | `Utkarsh_Tiwari_Software_Engineer.base.tex` |
-| Internship | `Utkarsh_Tiwari_Software_Engineering_Intern.tex` + `.pdf` | `Utkarsh_Tiwari_Software_Engineering_Intern.base.tex` |
+**The agent will not submit free-text fields.** It fills dropdowns, uploads
+files, and completes structured inputs. It stops at anything requiring a claim
+about me, because the model has no way to verify whether such a claim is true
+and I am the one accountable for it. Short answers get drafted from the resume
+for review; they never get submitted automatically.
 
-Each listing: delete the previous working `.tex`/`.pdf` for that kind, tailor from the `.base.tex`, save the same names, compile PDF, then apply.
+**A dry-run mode exercises the whole path without touching a live form**, so a
+changed selector or a changed dependency surfaces in a test rather than in a
+submission.
 
-The OpenAI **API is not free** (a ChatGPT Plus subscription does not include API credits). Leave `OPENAI_API_KEY` empty to skip the model. If you set a key, the model is instructed to return **a full `.tex` file only** (no markdown). `gpt-4o-mini` is cheap but billed per token.
+## What the run log caught
 
-## Rules
+The pipeline logs every decision as JSONL: timestamp, company, title, URL,
+whether it submitted, and why not if it did not.
 
-- Full-time: United States only, base **≥ $110,000**. Missing pay → company/role average, then still enforce $110k.
-- Internships: **≥ $57/hour**. Missing hours → **40 hours/week**. Relocation/housing increase rank only.
-- Required short-answer fields: answers can be drafted from the resume; **do not submit**.
-- No application database. One unread digest at a time, listings in order, mark the email read after it is processed.
+One run logged 1,316 decisions. 1,271 of them — 96.6% — were skipped with the
+reason `below_57_hourly`. The filter was working exactly as written. The
+problem was that nothing in the pipeline could tell me a single threshold was
+rejecting almost everything: no exception was raised, no run failed, and every
+reason field was populated neatly. It was visible only by aggregating outcomes
+rather than reading them.
+
+That is the failure mode this project actually taught me about. Code that
+breaks announces itself. Code that is quietly wrong does not.
 
 ## Setup
 
-```powershell
-cd C:\Users\tiwar\projects\job-apply-bot
+Requires Python 3.11+, and `latexmk` or `pdflatex` on PATH.
+
+```bash
+git clone https://github.com/utiwari21/job-apply-bot.git
+cd job-apply-bot
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m playwright install chromium
-copy .env.example .env
-# edit .env, config/profile.yaml, and the two .base.tex resumes
-python -m src.runner --dry-run
+cp .env.example .env
+```
+
+Then edit `.env`, `config/profile.yaml`, and the resume template.
+
+```bash
+python -m src.runner --dry-run   # no submissions
 python -m src.runner
 ```
 
-Needs `latexmk` or `pdflatex` on PATH.
+## Gmail credentials
+
+IMAP with an App Password. No Google Cloud project, no OAuth client, no
+service-account JSON.
+
+1. Gmail → Settings → Forwarding and POP/IMAP → enable IMAP.
+2. [Google Account security](https://myaccount.google.com/security) → enable
+   2-Step Verification.
+3. [App passwords](https://myaccount.google.com/apppasswords) → create one.
+   Google shows the 16-character value once.
+4. Set `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` in `.env`.
+
+A normal account password will be rejected by IMAP.
+
+SMTP is not used for reading mail — it only sends. It is optional here, for
+notifying yourself after a run.
+
+## Model
+
+Defaults to `gemini-2.5-flash` via `GEMINI_API_KEY`. Leave the key empty to
+skip tailoring and submit the template unchanged. Billed per token.
+
+## Configuration
+
+`config/filters.yaml` holds the filter criteria — pay floors, location
+requirement, assumed hours for postings with no stated pay.
+`config/profile.yaml` holds the details that go on application forms.
 
 ## Tests
 
-```powershell
+```bash
 pytest -q
 ```
+
+Covers filter logic, profile loading, and resume generation.
